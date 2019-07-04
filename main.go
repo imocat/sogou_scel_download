@@ -64,7 +64,7 @@ func download(remoteUrl string, localPath string) (err error) {
 func getHtml(url string) (body []byte, err error) {
 
 	clt := http.Client{
-		Timeout: 3 * time.Second,
+		Timeout: 30 * time.Second,
 	}
 
 	resp, err := clt.Get(url)
@@ -101,23 +101,44 @@ func main() {
 		go work(downloadDir)
 	}
 
-	id := 1
+	i := 1
 	for {
-		c <- id
-		id++
+		c <- i
+		i++
 	}
+
 }
 
 func work(downloadDir string) {
 
 	for {
 		categoryID := <-c
-		downloadCellDict(downloadDir, 100, categoryID)
+		findSCELURL(downloadDir, 100, categoryID)
 	}
 
 }
 
-func downloadCellDict(downloadDir string, maxPages int, categoryID int) (err error) {
+func downloadScelFile(downloadDir string, cellURL string, cellName string) (err error) {
+
+	fmt.Println(cellName)
+
+	cellPath := path.Join(downloadDir, strings.Replace(cellName, "/", "", -1)+".scel")
+	err = existsCallback(cellPath, func(exists bool) (err error) {
+		if exists {
+			return
+		}
+
+		return download(cellURL, cellPath)
+	})
+
+	if err != nil {
+		return err
+	}
+
+	return
+}
+
+func findSCELURL(downloadDir string, maxPages int, categoryID int) (nums int, err error) {
 
 	err = existsCallback(downloadDir, func(exists bool) (err error) {
 		if exists {
@@ -136,45 +157,46 @@ func downloadCellDict(downloadDir string, maxPages int, categoryID int) (err err
 		url := fmt.Sprintf("https://pinyin.sogou.com/dict/cate/index/%d/default/%d", categoryID, page)
 		body, err := getHtml(url)
 		if err != nil {
-			return err
+			return nums, err
 		}
 
 		re, err := regexp.Compile(`/dict/detail/index/(\d+)`)
 		if err != nil {
-			return err
+			return nums, err
 		}
 
 		results := re.FindAllStringSubmatch(string(body), -1)
 		if err != nil {
-			return err
+			return nums, err
 		}
 
-		fmt.Println(categoryID, page, len(results))
+		//fmt.Println(categoryID, page, len(results))
 
+		nums = len(results)
 		//翻页没有数据时，退出循环
-		if len(results) == 0 {
+		if nums == 0 {
 			break
 		}
 
 		for i := range results {
 			cellID, err := strconv.Atoi(results[i][1])
 			if err != nil {
-				return err
+				return nums, err
 			}
 
 			body, err := getHtml(fmt.Sprintf("https://pinyin.sogou.com/dict/detail/index/%d", cellID))
 			if err != nil {
-				return err
+				return nums, err
 			}
 
 			red, err := regexp.Compile(`\/\/pinyin\.sogou\.com\/d\/dict\/download_cell\.php\?id=(\d+)&name=([^"&]+)`)
 			if err != nil {
-				return err
+				return nums, err
 			}
 
 			cellResults := red.FindAllStringSubmatch(string(body), -1)
 			if err != nil {
-				return err
+				return nums, err
 			}
 
 			//没有数据，退出
@@ -183,29 +205,19 @@ func downloadCellDict(downloadDir string, maxPages int, categoryID int) (err err
 			}
 
 			for j := range cellResults {
-				cellUrl := fmt.Sprintf("http:%s", cellResults[j][0])
-
+				cellURL := fmt.Sprintf("http:%s", cellResults[j][0])
 				cellName := cellResults[j][2]
-				// fmt.Println(cellID, cellName)
 
-				cellPath := path.Join(downloadDir, strings.Replace(cellName, "/", "", -1)+".scel")
-				err = existsCallback(cellPath, func(exists bool) (err error) {
-					if exists {
-						return
-					}
-
-					return download(cellUrl, cellPath)
-				})
-
+				err = downloadScelFile(downloadDir, cellURL, cellName)
 				if err != nil {
-					return err
+					return nums, err
 				}
 			}
 
 		}
 
 		//翻页列表数据少于10条，表示没有下一页，退出循环
-		if len(results) < 10 {
+		if nums < 10 {
 			break
 		}
 	}
